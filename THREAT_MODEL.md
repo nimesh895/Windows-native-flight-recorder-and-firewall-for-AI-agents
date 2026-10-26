@@ -60,7 +60,20 @@ $$\text{Signature}_i = \text{Ed25519-Sign}\big(\text{PrivateKey}, H_i\big)$$
 - **Altered row data:** `SHA-256(RowData)` will not equal stored `record_hash`.
 - **Replaced row hash:** Signature verification with `ed25519_public.pem` will fail.
 - **Deleted row:** Row $i+1$'s `prev_hash` will not match Row $i-1$'s hash.
-- **Appended forged row:** Without the offline Ed25519 private key, an attacker cannot forge valid signatures.
+- **Appended forged row:** Without the Ed25519 private key, an attacker cannot forge valid signatures.
+- **Log truncation:** Detected by verifying against external anchor files (`abb verify --anchor anchor.json`).
+
+### 4.3 Honest Assessment of Key-Handling Limits & Assumptions
+1. **Co-located Private Key Boundary**:
+   In standard user-mode deployments where `ed25519_private.pem` is stored on the local disk alongside the agent process (e.g. in `.blackbox_keys/`), any adversary who achieves full arbitrary code execution within the user's OS context can read the private key. With the private key in hand, the adversary could rewrite the database and re-sign the entire hash chain.
+2. **What Local Signing Protects Against**:
+   - Unauthorized database tampering by unprivileged processes or secondary tools.
+   - Accidental row corruption, deletion, or manual edits by administrators or malicious third parties who lack direct filesystem access to `.blackbox_keys/`.
+   - Post-incident repudiation: the agent cannot claim it did not generate logged actions unless keys were compromised.
+3. **Achieving True Tamper-Proof Forensics via Anchoring**:
+   - **External Anchoring (`abb anchor`)**: Regularly exporting the latest signed anchor hash (`blackbox_anchor.json`) to an external medium (e.g. remote syslog, an immutable S3 bucket with Object Lock, a private Git repository, or an RFC 3161 trusted timestamp authority).
+   - If a local attacker subsequently truncates or rewrites the local database, `abb verify --anchor external_anchor.json` mathematically detects the rollback/truncation immediately.
+   - For high-assurance environments, keys should be backed by an external HSM, Windows DPAPI / TPM, or an isolated out-of-process signing daemon.
 
 ---
 

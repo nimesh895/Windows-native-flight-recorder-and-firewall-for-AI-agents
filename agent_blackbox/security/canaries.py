@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import base64
+import urllib.parse
+import re
 import secrets
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from pydantic import BaseModel, Field
 
 from agent_blackbox.security.windows_path import WindowsPathNormalizer
@@ -102,35 +105,116 @@ class CanaryManager:
 
         return files_created
 
+    def _token_variants(self, token: str) -> List[str]:
+        """
+        Generates standard encoding variations for a canary token:
+        - Raw token
+        - Standard Base64
+        - URL-safe Base64 (with and without padding)
+        - URL-encoded (standard and quote_plus)
+        """
+        variants = {token}
+        tok_bytes = token.encode("utf-8")
+
+        # Base64 standard
+        b64_std = base64.b64encode(tok_bytes).decode("utf-8")
+        variants.add(b64_std)
+
+        # Base64 urlsafe
+        b64_url = base64.urlsafe_b64encode(tok_bytes).decode("utf-8")
+        variants.add(b64_url)
+        variants.add(b64_url.rstrip("="))
+
+        # URL encoded
+        url_enc = urllib.parse.quote(token, safe="")
+        variants.add(url_enc)
+        variants.add(urllib.parse.quote_plus(token))
+
+        return [v for v in variants if v]
+
+    def _extract_decoded_candidates(self, text: str) -> Set[str]:
+        """
+        Extracts candidate strings from URL decoding and Base64 decoding of embedded blobs.
+        """
+        candidates = {text}
+
+        # 1. URL decoding
+        try:
+            unquoted = urllib.parse.unquote(text)
+            if unquoted != text:
+                candidates.add(unquoted)
+        except Exception:
+            pass
+
+        # 2. Extract potential base64 sequences (min 16 chars)
+        b64_regex = re.compile(r"\b([A-Za-z0-9+/]{16,}={0,2}|[A-Za-z0-9_-]{16,}={0,2})\b")
+        for match in b64_regex.finditer(text):
+            chunk = match.group(1)
+            # Try standard b64 decode
+            for pad in range(4):
+                padded = chunk + ("=" * pad)
+                try:
+                    decoded = base64.b64decode(padded, validate=False).decode("utf-8", errors="ignore")
+                    if decoded and len(decoded) >= 8:
+                        candidates.add(decoded)
+                    break
+                except Exception:
+                    pass
+
+        return candidates
+
     def check_arguments_and_payload(self, tool_name: str, arguments: Any,
                                    response_data: Optional[Any] = None) -> List[TripwireAlert]:
         """
-        Inspects tool arguments, paths, and response data for any canary trips.
+        Inspects tool arguments, paths, and response data for any canary trips,
+        including base64 and URL-encoded token variations.
         """
         alerts: List[TripwireAlert] = []
 
-        # Convert arguments to string for token matching
+        # Convert arguments and response to string
         args_str = json.dumps(arguments, ensure_ascii=False) if arguments is not None else ""
         resp_str = json.dumps(response_data, ensure_ascii=False) if response_data is not None else ""
 
-        # Check for canary tokens in arguments or responses
+        args_candidates = self._extract_decoded_candidates(args_str) if args_str else set()
+        resp_candidates = self._extract_decoded_candidates(resp_str) if resp_str else set()
+
+        # Check for canary tokens across raw and decoded candidates
         for token in self.tokens:
-            if token in args_str:
-                alerts.append(TripwireAlert(
-                    alert_type="canary_token",
-                    canary_id=token[:10] + "...",
-                    target=tool_name,
-                    severity="CRITICAL",
-                    description=f"Canary secret token detected in arguments of tool '{tool_name}'",
-                ))
-            if resp_str and token in resp_str:
-                alerts.append(TripwireAlert(
-                    alert_type="canary_token",
-                    canary_id=token[:10] + "...",
-                    target=tool_name,
-                    severity="CRITICAL",
-                    description=f"Canary secret token leaked in response of tool '{tool_name}'",
-                ))
+            variants = self._token_variants(token)
+            
+            # Check in arguments
+            triggered_arg = False
+            for cand in args_candidates:
+                for var in variants:
+                    if var in cand:
+                        alerts.append(TripwireAlert(
+                            alert_type="canary_token",
+                            canary_id=token[:10] + "...",
+                            target=tool_name,
+                            severity="CRITICAL",
+                            description=f"Canary secret token (raw or encoded) detected in arguments of tool '{tool_name}'",
+                        ))
+                        triggered_arg = True
+                        break
+                if triggered_arg:
+                    break
+
+            # Check in response
+            triggered_resp = False
+            for cand in resp_candidates:
+                for var in variants:
+                    if var in cand:
+                        alerts.append(TripwireAlert(
+                            alert_type="canary_token",
+                            canary_id=token[:10] + "...",
+                            target=tool_name,
+                            severity="CRITICAL",
+                            description=f"Canary secret token (raw or encoded) leaked in response of tool '{tool_name}'",
+                        ))
+                        triggered_resp = True
+                        break
+                if triggered_resp:
+                    break
 
         # Check for honeyfile paths
         def scan_for_paths(item: Any):

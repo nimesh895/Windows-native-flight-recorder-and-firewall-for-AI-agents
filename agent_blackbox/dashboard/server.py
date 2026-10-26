@@ -19,6 +19,21 @@ def create_dashboard_app(config: BlackboxConfig, storage: Optional[AuditStorage]
     verifier = AuditVerifier(db_path=config.audit.db_path)
     expected_token = config.dashboard.session_token
 
+    # Middleware: Validate Host header to defeat DNS rebinding & host-header injection attacks
+    @app.middleware("http")
+    async def validate_host_header(request: Request, call_next):
+        raw_host = request.headers.get("host", "")
+        # Strip port if present
+        host_name = raw_host.split(":")[0].strip().lower()
+        allowed_hosts = {"127.0.0.1", "localhost", "testserver"}
+
+        if not host_name or host_name not in allowed_hosts:
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content={"detail": f"Forbidden: Host header '{raw_host}' is not permitted. Only 127.0.0.1 / localhost allowed."},
+            )
+        return await call_next(request)
+
     def verify_token(
         token: Optional[str] = Query(None),
         x_token: Optional[str] = Header(None, alias="X-Blackbox-Token"),

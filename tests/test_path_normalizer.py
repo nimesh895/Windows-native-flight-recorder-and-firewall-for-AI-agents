@@ -43,3 +43,46 @@ def test_unc_prefix_stripping():
     norm = WindowsPathNormalizer.normalize(r"\\?\C:\Windows\System32")
     assert not norm.startswith(r"\\?\")
     assert "windows/system32" in norm.lower()
+
+
+def test_nonexistent_path_resolves_nearest_parent(tmp_path):
+    existing_dir = tmp_path / "real_dir"
+    existing_dir.mkdir()
+
+    # Non-existent target file inside existing parent
+    target = existing_dir / "does_not_exist.txt"
+    norm = WindowsPathNormalizer.normalize(target)
+    
+    expected_parent_norm = WindowsPathNormalizer.normalize(existing_dir)
+    assert norm.startswith(expected_parent_norm)
+    assert norm.endswith("does_not_exist.txt")
+
+    # Non-existent multi-level nested child
+    deep_target = existing_dir / "nonexistent_sub" / "leaf.txt"
+    deep_norm = WindowsPathNormalizer.normalize(deep_target)
+    assert deep_norm.startswith(expected_parent_norm)
+    assert deep_norm.endswith("nonexistent_sub/leaf.txt")
+
+
+def test_symlink_and_junction_resolution(tmp_path):
+    real_target_dir = tmp_path / "real_target"
+    real_target_dir.mkdir()
+    link_dir = tmp_path / "link_to_target"
+
+    try:
+        # Create directory symlink (or junction if supported)
+        link_dir.symlink_to(real_target_dir, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        # On Windows without Developer Mode, creating symlinks can raise OSError; skip if OS privilege restricts
+        pytest.skip("Symlink creation requires Developer Mode or SeCreateSymbolicLinkPrivilege")
+
+    # Access a non-existent file through the symlink directory
+    file_via_link = link_dir / "sub_nonexistent.txt"
+    norm_result = WindowsPathNormalizer.normalize(file_via_link)
+
+    # Must resolve through the link to the real target directory!
+    real_norm = WindowsPathNormalizer.normalize(real_target_dir)
+    assert norm_result.startswith(real_norm)
+    assert "link_to_target" not in norm_result
+    assert norm_result.endswith("sub_nonexistent.txt")
+

@@ -10,6 +10,7 @@ from agent_blackbox.audit.storage import AuditStorage
 from agent_blackbox.audit.verifier import AuditVerifier
 from agent_blackbox.security.policy import PolicyEngine
 from agent_blackbox.security.redactor import SecretRedactor
+from agent_blackbox.security.tool_pinning import ToolPinningManager
 from agent_blackbox.demos.attacks import DEMO_ATTACK_SCENARIOS, AttackScenario
 
 
@@ -25,6 +26,15 @@ class AttackDemoRunner:
         self.config = self._build_demo_config()
         self.audit_storage = AuditStorage(db_path=self.db_path)
         self.policy_engine = PolicyEngine(config=self.config)
+        self.tool_pinning_mgr = ToolPinningManager()
+        # Pre-pin benign tool definitions
+        self.tool_pinning_mgr.pin_tools([
+            {
+                "name": "read_file",
+                "description": "Reads file safely.",
+                "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}},
+            }
+        ])
 
     def _build_demo_config(self) -> BlackboxConfig:
         config = BlackboxConfig(
@@ -80,6 +90,16 @@ class AttackDemoRunner:
             # Check response injection if simulated response provided
             resp_injection = None
             if scenario.simulated_server_response:
+                # Check for dynamic tool rug-pull
+                if scenario.tool_name == "tools/list" and isinstance(scenario.simulated_server_response, dict):
+                    tools = scenario.simulated_server_response.get("tools", [])
+                    rugpulls = self.tool_pinning_mgr.verify_tools_list(tools)
+                    if rugpulls:
+                        decision.is_blocked = True
+                        decision.severity = "CRITICAL"
+                        decision.risk_score = 100
+                        decision.reason = f"Tool description rug-pull detected: {rugpulls[0].tool_name} was dynamically altered!"
+
                 resp_injection = self.policy_engine.injection_scanner.scan_tool_response(
                     scenario.simulated_server_response
                 )

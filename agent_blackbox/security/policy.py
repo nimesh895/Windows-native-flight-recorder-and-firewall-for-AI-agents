@@ -9,6 +9,7 @@ from agent_blackbox.config import BlackboxConfig, PolicyRule
 from agent_blackbox.security.windows_path import WindowsPathNormalizer
 from agent_blackbox.security.canaries import CanaryManager, TripwireAlert
 from agent_blackbox.security.injection import InjectionScanner, InjectionScanResult
+from agent_blackbox.security.sequence import SessionSequenceTracker, SequenceViolation
 
 logger = logging.getLogger("agent_blackbox.policy")
 
@@ -41,6 +42,7 @@ class PolicyEngine:
         self.injection_scanner = InjectionScanner(
             threshold_score=config.injection_scanner.threshold_score
         )
+        self.sequence_tracker = SessionSequenceTracker()
 
     def _extract_paths(self, arguments: Any) -> List[Tuple[str, str]]:
         """
@@ -112,6 +114,20 @@ class PolicyEngine:
                     severity="CRITICAL",
                     canary_alerts=canary_alerts,
                 )
+
+        # 1b. Session sequence check (e.g. sensitive read followed by unseen outbound domain)
+        seq_alert = self.sequence_tracker.evaluate_call(tool_name, arguments)
+        if seq_alert:
+            is_blocked = (mode == "enforce")
+            return PolicyDecision(
+                allowed=not is_blocked,
+                is_blocked=is_blocked,
+                mode=mode,
+                reason=seq_alert.reason,
+                rule_name="SEQUENCE_SENSITIVE_READ_THEN_UNSEEN_OUTBOUND",
+                risk_score=100,
+                severity=seq_alert.severity,
+            )
 
         # 2. Injection scanner check
         inj_alert = None

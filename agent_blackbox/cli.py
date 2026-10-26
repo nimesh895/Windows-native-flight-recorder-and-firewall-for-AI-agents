@@ -11,6 +11,7 @@ from agent_blackbox.security.crypto import KeyManager
 from agent_blackbox.security.canaries import CanaryManager
 from agent_blackbox.audit.storage import AuditStorage
 from agent_blackbox.audit.verifier import AuditVerifier
+from agent_blackbox.audit.anchoring import create_anchor
 from agent_blackbox.proxy.stdio_proxy import McpStdioProxy
 from agent_blackbox.demos.attack_runner import AttackDemoRunner
 
@@ -74,20 +75,57 @@ def cmd_verify(args):
 
     km = KeyManager(key_dir=args.keys)
     verifier = AuditVerifier(db_path=db_path, key_mgr=km)
-    res = verifier.verify()
+    res = verifier.verify(anchor_path=args.anchor)
 
     print("=" * 60)
     print("AGENTBLACKBOX CRYPTOGRAPHIC INTEGRITY VERIFICATION")
     print("=" * 60)
     print(f"Database:          {db_path}")
+    if args.anchor:
+        print(f"Anchor File:       {args.anchor}")
     print(f"Total Records:     {res.total_records}")
     print(f"Verified Records:  {res.verified_records}")
     if res.is_valid:
         print("\n[+] SUCCESS: Hash chain and Ed25519 signatures are 100% VALID.")
+        if args.anchor:
+            print("    Anchor verified: Database has not been truncated or rolled back.")
         print("    No records have been modified, inserted, deleted, or reordered.")
         return 0
     else:
-        print(f"\n[-] INTEGRITY ERROR: Tampering detected!")
+        print(f"\n[-] INTEGRITY ERROR: Tampering or truncation detected!")
+        if res.tampered_record_id:
+            print(f"    Record ID:     #{res.tampered_record_id}")
+        print(f"    Details:       {res.error_message}")
+        return 2
+
+
+def cmd_anchor(args):
+    """Exports the latest record hash and timestamp to an external anchor file."""
+    db_path = Path(args.db)
+    if not db_path.exists():
+        print(f"[-] Database file does not exist: {db_path}")
+        return 1
+
+    km = KeyManager(key_dir=args.keys)
+    storage = AuditStorage(db_path=db_path, key_mgr=km)
+
+    try:
+        anchor = create_anchor(storage=storage, output_path=args.output, key_mgr=km)
+        print("=" * 60)
+        print("AGENTBLACKBOX AUDIT LOG ANCHOR EXPORT")
+        print("=" * 60)
+        print(f"Database:          {db_path}")
+        print(f"Exported Anchor:   {args.output}")
+        print(f"Anchored Record:   #{anchor.anchored_record_id}")
+        print(f"Anchored Hash:     {anchor.anchored_record_hash}")
+        print(f"Timestamp:         {anchor.anchored_at}")
+        print(f"Ed25519 Signature: {anchor.signature[:32]}...")
+        print("\n[+] Anchor successfully exported.")
+        print("    Store this anchor externally to detect subsequent database truncation!")
+        return 0
+    except Exception as e:
+        print(f"[-] Failed to export anchor: {str(e)}")
+        return 1
         print(f"    Record ID:     #{res.tampered_record_id}")
         print(f"    Details:       {res.error_message}")
         return 2
@@ -183,6 +221,13 @@ def main():
     p_verify = subparsers.add_parser("verify", help="Cryptographically verify audit log hash chain and signatures")
     p_verify.add_argument("--db", default="blackbox_audit.db", help="Path to SQLite audit database")
     p_verify.add_argument("--keys", default=".blackbox_keys", help="Directory containing Ed25519 keys")
+    p_verify.add_argument("--anchor", default=None, help="Path to anchor JSON file to verify against truncation")
+
+    # anchor
+    p_anchor = subparsers.add_parser("anchor", help="Export latest hash and timestamp to an external anchor file")
+    p_anchor.add_argument("--db", default="blackbox_audit.db", help="Path to SQLite audit database")
+    p_anchor.add_argument("--keys", default=".blackbox_keys", help="Directory containing Ed25519 keys")
+    p_anchor.add_argument("--output", "-o", default="blackbox_anchor.json", help="Destination path for anchor JSON")
 
     # dashboard
     p_dash = subparsers.add_parser("dashboard", help="Start local web dashboard on 127.0.0.1")
@@ -208,6 +253,8 @@ def main():
         sys.exit(cmd_proxy(args))
     elif args.command == "verify":
         sys.exit(cmd_verify(args))
+    elif args.command == "anchor":
+        sys.exit(cmd_anchor(args))
     elif args.command == "dashboard":
         sys.exit(cmd_dashboard(args))
     elif args.command == "canary":

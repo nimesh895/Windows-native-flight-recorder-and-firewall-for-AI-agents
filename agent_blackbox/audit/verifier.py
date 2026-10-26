@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from agent_blackbox.audit.models import AuditRecord, GENESIS_HASH
 from agent_blackbox.security.crypto import KeyManager
+from agent_blackbox.audit.anchoring import AuditAnchor
 
 
 class VerificationResult(BaseModel):
@@ -32,7 +33,7 @@ class AuditVerifier:
         self.db_path = Path(db_path)
         self.key_mgr = key_mgr or KeyManager()
 
-    def verify(self) -> VerificationResult:
+    def verify(self, anchor_path: Optional[str | Path] = None) -> VerificationResult:
         if not self.db_path.exists():
             return VerificationResult(
                 is_valid=False,
@@ -47,6 +48,45 @@ class AuditVerifier:
         try:
             cursor = conn.execute("SELECT * FROM audit_events ORDER BY id ASC")
             rows = cursor.fetchall()
+
+            # 1. Truncation check against external anchor if provided
+            if anchor_path:
+                try:
+                    anchor = AuditAnchor.load_from_file(anchor_path)
+                except Exception as e:
+                    return VerificationResult(
+                        is_valid=False,
+                        total_records=len(rows),
+                        verified_records=0,
+                        error_message=f"Failed to load anchor file: {str(e)}",
+                    )
+
+                # Verify anchor signature
+                if not self.key_mgr.verify(anchor.payload_bytes(), anchor.signature):
+                    return VerificationResult(
+                        is_valid=False,
+                        total_records=len(rows),
+                        verified_records=0,
+                        error_message="Anchor signature verification failed! The anchor file is invalid or forged.",
+                    )
+
+                # Check if database has been truncated
+                if len(rows) < anchor.anchored_record_id:
+                    return VerificationResult(
+                        is_valid=False,
+                        total_records=len(rows),
+                        verified_records=0,
+                        tampered_record_id=anchor.anchored_record_id,
+                        error_message=(
+                            f"Audit log truncation detected! Anchored record #{anchor.anchored_record_id} "
+                            f"(hash: {anchor.anchored_record_hash[:16]}...) is missing from the database. "
+                            f"Database only contains {len(rows)} records."
+                        ),
+                        details={
+                            "anchored_record_id": anchor.anchored_record_id,
+                            "current_latest_id": len(rows),
+                        },
+                    )
 
             if not rows:
                 return VerificationResult(

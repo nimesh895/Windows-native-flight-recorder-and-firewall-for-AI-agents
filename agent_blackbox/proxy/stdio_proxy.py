@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from agent_blackbox.config import BlackboxConfig
 from agent_blackbox.security.policy import PolicyEngine, PolicyDecision
+from agent_blackbox.security.tool_pinning import ToolPinningManager
 from agent_blackbox.audit.storage import AuditStorage
 from agent_blackbox.proxy.mcp_spec import (
     JsonRpcRequest,
@@ -39,6 +40,7 @@ class McpStdioProxy:
         self.session_id = session_id or str(uuid.uuid4())
         self.audit_storage = audit_storage or AuditStorage(db_path=config.audit.db_path)
         self.policy_engine = PolicyEngine(config=config)
+        self.tool_pinning_mgr = ToolPinningManager(enforce=(config.mode == "enforce"))
         self.process: Optional[asyncio.subprocess.Process] = None
         self._pending_requests: Dict[Any, JsonRpcRequest] = {}
 
@@ -224,9 +226,35 @@ class McpStdioProxy:
                 )
 
             elif req and req.method == "tools/list":
-                # Scan tool list descriptions for poisoning
+                # Scan tool list descriptions for poisoning & rug-pull mutation
                 if isinstance(msg.result, dict) and "tools" in msg.result:
                     tools_list = msg.result.get("tools", [])
+
+                    # 1. Check for dynamic rug-pull description mutation
+                    rugpull_alerts = self.tool_pinning_mgr.verify_tools_list(tools_list)
+                    if rugpull_alerts:
+                        self.audit_storage.append_event(
+                            session_id=self.session_id,
+                            event_type="rugpull_alert",
+                            tool_name="tools/list",
+                            result={"mutations": [a.model_dump() for a in rugpull_alerts]},
+                            decision="BLOCKED" if self.config.mode == "enforce" else "MONITORED",
+                            reason=f"Tool description rug-pull detected: {rugpull_alerts[0].tool_name} was dynamically modified!",
+                            risk_score=100,
+                            severity="CRITICAL",
+                        )
+                        if self.config.mode == "enforce":
+                            error_resp = JsonRpcResponse(
+                                id=msg.id,
+                                error=JsonRpcError(
+                                    code=-32003,
+                                    message=f"AgentBlackbox Security Block: Tool description rug-pull detected for '{rugpull_alerts[0].tool_name}'",
+                                    data={"mutations": [a.model_dump() for a in rugpull_alerts]},
+                                ),
+                            )
+                            return serialize_json_rpc(error_resp)
+
+                    # 2. Check for prompt injection in tool descriptions
                     poisoned_tools = []
                     for t in tools_list:
                         scan = self.policy_engine.injection_scanner.scan_tool_spec(t)

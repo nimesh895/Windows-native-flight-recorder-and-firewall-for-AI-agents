@@ -73,6 +73,46 @@ class WindowsPathNormalizer:
         return path_str
 
     @classmethod
+    def resolve_safe(cls, path_obj: Path) -> Path:
+        """
+        Safely resolves symlinks, junctions, and directory traversal for both
+        existing and non-existent paths.
+        Finds the nearest existing ancestor, fully resolves that ancestor
+        (following symlinks and junctions), and re-appends the non-existent trailing parts.
+        """
+        # Ensure absolute first
+        curr = path_obj if path_obj.is_absolute() else path_obj.absolute()
+
+        # If it completely exists, resolve directly
+        try:
+            if curr.exists():
+                return curr.resolve()
+        except (PermissionError, OSError):
+            pass
+
+        # Walk up to the nearest existing ancestor
+        parts_to_reappend: list[str] = []
+        while not curr.exists() and curr != curr.parent:
+            parts_to_reappend.append(curr.name)
+            curr = curr.parent
+
+        try:
+            resolved_parent = curr.resolve()
+        except (RuntimeError, PermissionError, OSError):
+            resolved_parent = curr.absolute()
+
+        # If parent has 8.3 short name, expand it
+        resolved_parent_str = cls.resolve_8dot3_path(str(resolved_parent))
+        resolved_parent = Path(resolved_parent_str)
+
+        # Re-append non-existent trailing segments
+        result = resolved_parent
+        for part in reversed(parts_to_reappend):
+            result = result / part
+
+        return result
+
+    @classmethod
     def normalize(cls, path_input: str | Path, base_dir: Optional[str | Path] = None) -> str:
         """
         Fully normalize a path on Windows:
@@ -81,7 +121,7 @@ class WindowsPathNormalizer:
         3. Eliminate '.' and '..'
         4. Resolve UNC prefixes (\\\\?\\)
         5. Resolve 8.3 short paths
-        6. Resolve junctions & symlinks
+        6. Resolve junctions & symlinks (nearest existing ancestor + remainder)
         7. Standardize slashes to forward slashes for matching, and lower-case drive letter
         """
         if isinstance(path_input, Path):
@@ -110,15 +150,11 @@ class WindowsPathNormalizer:
         if not p.is_absolute() and base_dir:
             p = Path(base_dir) / p
 
-        # Resolve .. and symlinks if exists
-        try:
-            resolved = p.resolve()
-        except (RuntimeError, PermissionError, OSError):
-            resolved = p.absolute()
-
+        # Resolve symlinks, junctions, and non-existent parent traversal safely
+        resolved = cls.resolve_safe(p)
         resolved_str = str(resolved)
 
-        # Resolve 8.3 short name on Windows
+        # Resolve 8.3 short name on Windows if the full path exists
         resolved_str = cls.resolve_8dot3_path(resolved_str)
 
         # Standardize separators to forward slashes for uniform security checks

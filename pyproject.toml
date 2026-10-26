@@ -29,3 +29,4 @@ dev = [
 [project.scripts]
 agent-blackbox = "agent_blackbox.cli:main"
 blackbox = "agent_blackbox.cli:main"
+abb = "agent_blackbox.cli:main"
