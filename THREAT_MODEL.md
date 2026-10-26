@@ -47,6 +47,14 @@ Real MCP Server (Subprocess)
 | **Credential Leakage in Logs** | Raw API keys captured in audit databases | Stolen SQLite file exposes developer credentials | `SecretRedactor` converts credentials to SHA-256 hashes (`[REDACTED_SECRET:<type>:<hash>]`); raw values never touch disk. |
 | **Audit Log Tampering** | Attacker edits SQLite rows to hide exfiltration | Standard SQLite databases lack cryptographic proof | Every row is SHA-256 hash-chained to the previous row and signed with an Ed25519 private key. |
 
+### 3.1 Known Evasion Limits for Canaries (Hex, Chunked, Compressed)
+While the canary detector identifies raw tokens, Base64 variants, and URL-encoded strings, there are explicit known evasion boundaries that bypass text/regex pattern matching:
+1. **Hex Encoding Evasion**: Converting a token into a raw continuous hex string (e.g. `414b4941...`) avoids string pattern matching unless an arbitrary hex decoding pass is executed over all hex-like sequences.
+2. **Chunked Parameter Evasion**: An attacker or model splitting a canary token into separate parameters or multiple disjoint messages (e.g. `{"part1": "AKIA_CANARY_", "part2": "9999"}`) bypasses single-parameter contiguous pattern matching.
+3. **Compressed Stream Evasion**: Compressing payloads with gzip, zlib, or brotli turns ASCII tokens into binary entropy that cannot be matched without a full multi-format decompression and payload unpacking pipeline.
+
+These represent documented current boundaries (verified by automated tests in `tests/test_canary_limits.py`).
+
 ---
 
 ## 4. Cryptographic Proof of Integrity
@@ -63,17 +71,20 @@ $$\text{Signature}_i = \text{Ed25519-Sign}\big(\text{PrivateKey}, H_i\big)$$
 - **Appended forged row:** Without the Ed25519 private key, an attacker cannot forge valid signatures.
 - **Log truncation:** Detected by verifying against external anchor files (`abb verify --anchor anchor.json`).
 
-### 4.3 Honest Assessment of Key-Handling Limits & Assumptions
-1. **Co-located Private Key Boundary**:
-   In standard user-mode deployments where `ed25519_private.pem` is stored on the local disk alongside the agent process (e.g. in `.blackbox_keys/`), any adversary who achieves full arbitrary code execution within the user's OS context can read the private key. With the private key in hand, the adversary could rewrite the database and re-sign the entire hash chain.
-2. **What Local Signing Protects Against**:
-   - Unauthorized database tampering by unprivileged processes or secondary tools.
-   - Accidental row corruption, deletion, or manual edits by administrators or malicious third parties who lack direct filesystem access to `.blackbox_keys/`.
-   - Post-incident repudiation: the agent cannot claim it did not generate logged actions unless keys were compromised.
-3. **Achieving True Tamper-Proof Forensics via Anchoring**:
-   - **External Anchoring (`abb anchor`)**: Regularly exporting the latest signed anchor hash (`blackbox_anchor.json`) to an external medium (e.g. remote syslog, an immutable S3 bucket with Object Lock, a private Git repository, or an RFC 3161 trusted timestamp authority).
-   - If a local attacker subsequently truncates or rewrites the local database, `abb verify --anchor external_anchor.json` mathematically detects the rollback/truncation immediately.
-   - For high-assurance environments, keys should be backed by an external HSM, Windows DPAPI / TPM, or an isolated out-of-process signing daemon.
+### 4.3 Honest Threat Assessment: Same-User Key Theft & Protection Options
+1. **Plain Reality: A Same-User Attacker Can Steal the Signing Key**:
+   In standard user-mode deployments where the Ed25519 private key (`.blackbox_keys/ed25519_private.pem`) is unencrypted on the filesystem within the user's workspace, **any adversary or prompt-injected agent executing code with the same user privileges can directly read and steal the private key**.
+   Once an attacker reads `ed25519_private.pem`, they possess the cryptographic power to forge audit records, retroactively rewrite the database, and re-sign the entire SHA-256 hash chain to generate a clean-looking audit trail.
+
+2. **Hardening Options Implemented for Key Protection**:
+   - **Option A: Passphrase Protection (PKCS#8 with BestAvailableEncryption / PBKDF2)**:
+     The private key is stored encrypted with AES-256. At startup, `KeyManager` requires a passphrase (passed via `AGENT_BLACKBOX_KEY_PASSPHRASE` environment variable or secure vault). If the agent reads the `.pem` file off disk, it only retrieves an encrypted ciphertext.
+   - **Option B: Windows DPAPI Protection (`CryptProtectData`)**:
+     On Windows, the private key can be encrypted at rest using Windows Data Protection API (`dpapi_protect`). Decryption is tied to the user's Windows logon session master key and machine SID, preventing extraction across machines or by unprivileged sandboxed accounts.
+   - **Option C: External Anchoring (`abb anchor`)**:
+     By exporting signed anchor hashes to a remote immutable log or external Git commit, any attempt by a local attacker to roll back or rewrite history is mathematically proven and caught by `abb verify --anchor <file>`.
+   - **Option D: Out-of-Process Signing Daemon / HSM**:
+     For enterprise high-assurance requirements, signing operations must be delegated to a root/SYSTEM service or external Hardware Security Module (HSM) that never exposes the private key material to user-mode agents.
 
 ---
 

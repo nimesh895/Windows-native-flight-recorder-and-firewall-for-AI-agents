@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
@@ -17,20 +18,35 @@ class HeuristicRule(BaseModel):
 
 
 HEURISTIC_RULES: List[HeuristicRule] = [
-    # 1. System Prompt Override & Instruction Suppression
+    # 1. System Prompt Override & Instruction Suppression (English)
     HeuristicRule(
         id="OVERRIDE_IGNORE_PREVIOUS",
         category="system_override",
         weight=40,
-        pattern=re.compile(r"(?i)\b(?:ignore|disregard|forget|override)\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions|prompts|directives|guidelines)\b"),
+        pattern=re.compile(r"(?i)\b(?:ignore|disregard|forget|override)\s+(?:all\s+)?(?:previous|prior|above|earlier)\s+(?:instructions|prompts|directives|guidelines|rules)\b"),
         description="Attempt to suppress or override prior system instructions",
     ),
     HeuristicRule(
         id="OVERRIDE_NEW_PERSONA",
         category="system_override",
         weight=35,
-        pattern=re.compile(r"(?i)\b(?:you\s+are\s+now|act\s+as)\s+(?:unrestricted|unfiltered|jailbroken|DAN|an\s+evil|chaos)\b"),
+        pattern=re.compile(r"(?i)\b(?:you\s+are\s+now|act\s+as)\s+(?:unrestricted|unfiltered|jailbroken|DAN|an\s+evil|chaos|developer\s+mode)\b"),
         description="Persona alteration / jailbreak phrase",
+    ),
+    HeuristicRule(
+        id="OVERRIDE_MULTILINGUAL",
+        category="system_override",
+        weight=40,
+        pattern=re.compile(
+            r"(?i)(?:"
+            r"\b(?:ignora|olvida|descarta)\s+(?:todas\s+las\s+)?(?:instrucciones|directrices|reglas)\b|"  # Spanish
+            r"\b(?:ignorez|oubliez)\s+(?:toutes\s+les\s+)?(?:instructions|directives|règles)\b|"       # French
+            r"\b(?:ignoriere|vergiss)\s+(?:alle\s+)?(?:vorherigen\s+)?(?:anweisungen|instruktionen)\b|" # German
+            r"(?:忽略|忽视)(?:所有|之前的)?(?:指令|提示|规则)|"                                             # Chinese
+            r"(?:以前の|すべての)?(?:指示|プロンプト)を(?:無視|破棄)"                                      # Japanese
+            r")"
+        ),
+        description="Multilingual system instruction override evasion",
     ),
     HeuristicRule(
         id="SYSTEM_DELIMITER_INJECTION",
@@ -85,6 +101,13 @@ HEURISTIC_RULES: List[HeuristicRule] = [
         pattern=re.compile(r"(?i)\bcertutil(?:\.exe)?\s+-(?:urlcache|decode)\b"),
         description="Abuse of certutil.exe for payload download/decode",
     ),
+    HeuristicRule(
+        id="ENCODED_PAYLOAD_EXECUTION",
+        category="evasion",
+        weight=35,
+        pattern=re.compile(r"(?i)\b(?:base64\s+-d|b64decode|atob|hex\s+decode|rot13)\b[^\n]*(?:\|\s*(?:bash|sh|cmd|iex|eval)|exec\s*\()"),
+        description="Inline decode and execution pattern",
+    ),
 
     # 4. Prompt Leak / Re-direction
     HeuristicRule(
@@ -115,16 +138,26 @@ class InjectionScanner:
         self.threshold_score = threshold_score
         self.rules = HEURISTIC_RULES
 
+    @staticmethod
+    def normalize_text(text: str) -> str:
+        # Strip zero-width characters and invisible formatting marks
+        cleaned = re.sub(r"[\u200b-\u200f\uFEFF\u00ad\u2060\u200e]", "", text)
+        # Unicode NFKD normalization (e.g. converts fullwidth Ｉｇｎｏｒｅ -> Ignore)
+        norm = unicodedata.normalize("NFKD", cleaned)
+        # Normalize internal whitespace/newlines to counter split instructions
+        return re.sub(r"\s+", " ", norm).strip()
+
     def scan_text(self, text: str) -> InjectionScanResult:
         if not text or not isinstance(text, str):
             return InjectionScanResult()
 
+        norm_text = self.normalize_text(text)
         total_weight = 0
         matched = []
         categories = set()
 
         for rule in self.rules:
-            if rule.pattern.search(text):
+            if rule.pattern.search(text) or rule.pattern.search(norm_text):
                 total_weight += rule.weight
                 matched.append(f"{rule.id}: {rule.description}")
                 categories.add(rule.category)

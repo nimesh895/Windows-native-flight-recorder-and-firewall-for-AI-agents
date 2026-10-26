@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 from fastapi import FastAPI, Depends, HTTPException, Query, Header, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -12,26 +13,56 @@ from agent_blackbox.audit.storage import AuditStorage
 from agent_blackbox.audit.verifier import AuditVerifier
 
 
-def create_dashboard_app(config: BlackboxConfig, storage: Optional[AuditStorage] = None) -> FastAPI:
+def create_dashboard_app(
+    config: BlackboxConfig,
+    storage: Optional[AuditStorage] = None,
+    allow_testserver: bool = False,
+) -> FastAPI:
     app = FastAPI(title="AgentBlackbox Flight Recorder & Firewall", version="0.1.0")
 
     audit_store = storage or AuditStorage(db_path=config.audit.db_path)
     verifier = AuditVerifier(db_path=config.audit.db_path)
     expected_token = config.dashboard.session_token
 
-    # Middleware: Validate Host header to defeat DNS rebinding & host-header injection attacks
+    # Middleware: Validate Host header and Origin for state-changing operations
     @app.middleware("http")
-    async def validate_host_header(request: Request, call_next):
+    async def security_headers_middleware(request: Request, call_next):
+        # 1. Host header validation
         raw_host = request.headers.get("host", "")
-        # Strip port if present
         host_name = raw_host.split(":")[0].strip().lower()
-        allowed_hosts = {"127.0.0.1", "localhost", "testserver"}
+
+        allowed_hosts = {"127.0.0.1", "localhost"}
+        if allow_testserver:
+            allowed_hosts.add("testserver")
 
         if not host_name or host_name not in allowed_hosts:
             return JSONResponse(
                 status_code=status.HTTP_403_FORBIDDEN,
                 content={"detail": f"Forbidden: Host header '{raw_host}' is not permitted. Only 127.0.0.1 / localhost allowed."},
             )
+
+        # 2. Origin checking on state-changing requests (POST, PUT, PATCH, DELETE)
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            origin = request.headers.get("origin") or request.headers.get("referer")
+            if origin:
+                try:
+                    parsed_origin = urlparse(origin)
+                    origin_host = (parsed_origin.hostname or "").lower()
+                    allowed_origins = {"127.0.0.1", "localhost"}
+                    if allow_testserver:
+                        allowed_origins.add("testserver")
+
+                    if origin_host not in allowed_origins:
+                        return JSONResponse(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            content={"detail": f"Forbidden: Cross-origin state-changing request from '{origin}' rejected."},
+                        )
+                except Exception:
+                    return JSONResponse(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        content={"detail": "Forbidden: Malformed Origin header."},
+                    )
+
         return await call_next(request)
 
     def verify_token(

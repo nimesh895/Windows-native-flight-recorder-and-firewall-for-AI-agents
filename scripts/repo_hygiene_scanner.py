@@ -17,16 +17,22 @@ PATTERNS = {
     "REAL_LOOKING_PRIVATE_KEY": re.compile(r"-----BEGIN (?:RSA |EC )?PRIVATE KEY-----"),
 }
 
-EXCLUDED_EXTS = {".pyc", ".db", ".sqlite", ".png", ".jpg", ".ico"}
-EXCLUDED_DIRS = {".git", ".venv", "__pycache__", "node_modules"}
+# Exclusions removed: pyproject metadata, egg-info, caches, .db files, key files and logs are all actively scanned!
+EXCLUDED_EXTS = {".png", ".jpg", ".ico"}
+EXCLUDED_DIRS = {".git", ".venv"}
 
 
 def scan_file(filepath: Path) -> List[Dict[str, str]]:
     findings = []
     try:
+        # Read with utf-8 and ignore errors to scan both text, pyproject, and binary db/cache files
         content = filepath.read_text(encoding="utf-8", errors="ignore")
     except Exception:
-        return findings
+        try:
+            raw = filepath.read_bytes()
+            content = raw.decode("utf-8", errors="ignore")
+        except Exception:
+            return findings
 
     lines = content.splitlines()
     for line_no, line in enumerate(lines, 1):

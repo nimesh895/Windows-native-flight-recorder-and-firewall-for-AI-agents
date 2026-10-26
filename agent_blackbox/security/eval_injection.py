@@ -9,6 +9,7 @@ from agent_blackbox.security.injection import InjectionScanner
 
 
 class MetricsReport(BaseModel):
+    split_name: str = "all"
     total_samples: int
     malicious_count: int
     benign_count: int
@@ -23,13 +24,22 @@ class MetricsReport(BaseModel):
     details: List[Dict[str, Any]]
 
 
-def evaluate_corpus(corpus_path: str | Path, threshold_score: int = 40) -> MetricsReport:
+def evaluate_corpus(
+    corpus_path: str | Path,
+    threshold_score: int = 35,
+    split_filter: Optional[str] = None,
+) -> MetricsReport:
     p = Path(corpus_path)
     if not p.exists():
         raise FileNotFoundError(f"Corpus file not found: {p}")
 
     with open(p, "r", encoding="utf-8") as f:
-        samples = json.load(f)
+        all_samples = json.load(f)
+
+    if split_filter:
+        samples = [s for s in all_samples if s.get("split") == split_filter]
+    else:
+        samples = all_samples
 
     scanner = InjectionScanner(threshold_score=threshold_score)
 
@@ -41,6 +51,7 @@ def evaluate_corpus(corpus_path: str | Path, threshold_score: int = 40) -> Metri
         text = item.get("text", "")
         ground_truth = item.get("label", "").lower() == "malicious"
         category = item.get("category", "")
+        evasion_type = item.get("evasion_type", "none")
 
         res = scanner.scan_text(text)
         predicted = res.is_flagged
@@ -61,6 +72,7 @@ def evaluate_corpus(corpus_path: str | Path, threshold_score: int = 40) -> Metri
         details.append({
             "id": sample_id,
             "category": category,
+            "evasion_type": evasion_type,
             "ground_truth": "malicious" if ground_truth else "benign",
             "predicted": "malicious" if predicted else "benign",
             "risk_score": res.risk_score,
@@ -74,6 +86,7 @@ def evaluate_corpus(corpus_path: str | Path, threshold_score: int = 40) -> Metri
     accuracy = ((tp + tn) / len(samples)) if len(samples) > 0 else 0.0
 
     return MetricsReport(
+        split_name=split_filter or "all",
         total_samples=len(samples),
         malicious_count=tp + fn,
         benign_count=tn + fp,
@@ -89,25 +102,34 @@ def evaluate_corpus(corpus_path: str | Path, threshold_score: int = 40) -> Metri
     )
 
 
-def format_report_markdown(report: MetricsReport) -> str:
+def format_split_report_markdown(dev_report: MetricsReport, test_report: MetricsReport) -> str:
     lines = [
-        "# AgentBlackbox Injection Scanner // Precision & Recall Evaluation Report",
+        "# AgentBlackbox Injection Scanner // Dual Split Precision & Recall Report",
         "",
-        f"- **Total Samples:** {report.total_samples} (Malicious: {report.malicious_count}, Benign: {report.benign_count})",
-        f"- **Accuracy:**  `{report.accuracy * 100:.2f}%`",
-        f"- **Precision:** `{report.precision * 100:.2f}%` (TP: {report.true_positives}, FP: {report.false_positives})",
-        f"- **Recall:**    `{report.recall * 100:.2f}%` (TP: {report.true_positives}, FN: {report.false_negatives})",
-        f"- **F1 Score:**  `{report.f1_score * 100:.2f}%`",
+        "## 1. Development Set (70% - Tuned / Exploration Set)",
+        f"- **Samples:** {dev_report.total_samples} (Malicious: {dev_report.malicious_count}, Benign: {dev_report.benign_count})",
+        f"- **Precision:** `{dev_report.precision * 100:.2f}%` (TP: {dev_report.true_positives}, FP: {dev_report.false_positives})",
+        f"- **Recall:**    `{dev_report.recall * 100:.2f}%` (TP: {dev_report.true_positives}, FN: {dev_report.false_negatives})",
+        f"- **F1 Score:**  `{dev_report.f1_score * 100:.2f}%`",
+        f"- **Accuracy:**  `{dev_report.accuracy * 100:.2f}%`",
         "",
-        "## Detailed Confusion Matrix & Breakdown",
+        "## 2. Held-Out Test Set (30% - Unseen Evaluation Set)",
+        f"- **Samples:** {test_report.total_samples} (Malicious: {test_report.malicious_count}, Benign: {test_report.benign_count})",
+        f"- **Precision:** `{test_report.precision * 100:.2f}%` (TP: {test_report.true_positives}, FP: {test_report.false_positives})",
+        f"- **Recall:**    `{test_report.recall * 100:.2f}%` (TP: {test_report.true_positives}, FN: {test_report.false_negatives})",
+        f"- **F1 Score:**  `{test_report.f1_score * 100:.2f}%`",
+        f"- **Accuracy:**  `{test_report.accuracy * 100:.2f}%`",
         "",
-        "| ID | Ground Truth | Predicted | Verdict | Risk Score | Category |",
-        "|---|---|---|---|---|---|",
+        "## 3. Evasion Variants Performance Breakdown",
+        "| Evasion Type | Split | Ground Truth | Verdict | Matched Heuristic |",
+        "|---|---|---|---|---|",
     ]
 
-    for d in report.details:
+    all_details = dev_report.details + test_report.details
+    evasion_samples = [d for d in all_details if d.get("evasion_type") != "none"]
+    for d in evasion_samples[:20]:
         lines.append(
-            f"| `{d['id']}` | {d['ground_truth']} | {d['predicted']} | **{d['verdict']}** | {d['risk_score']}/100 | `{d['category']}` |"
+            f"| `{d.get('evasion_type')}` | `{d.get('id')}` | {d['ground_truth']} | **{d['verdict']}** | {d['matched'][0] if d['matched'] else 'None'} |"
         )
 
     return "\n".join(lines)
@@ -115,8 +137,9 @@ def format_report_markdown(report: MetricsReport) -> str:
 
 def main():
     corpus_file = Path(__file__).parent / "corpus" / "injection_corpus.json"
-    rep = evaluate_corpus(corpus_file, threshold_score=35)
-    print(format_report_markdown(rep))
+    dev_rep = evaluate_corpus(corpus_file, threshold_score=35, split_filter="dev")
+    test_rep = evaluate_corpus(corpus_file, threshold_score=35, split_filter="test")
+    print(format_split_report_markdown(dev_rep, test_rep))
 
 
 if __name__ == "__main__":
