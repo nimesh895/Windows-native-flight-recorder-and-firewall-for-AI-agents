@@ -1,0 +1,85 @@
+# ==============================================================================
+# AgentBlackbox Default Security Configuration
+# Windows-Native Flight Recorder & Firewall for AI Agents
+# ==============================================================================
+
+# Firewall operating mode:
+# - 'enforce': Blocks non-compliant calls and returns clean JSON-RPC error
+# - 'ask': Prompts user for approval
+# - 'monitor': Logs security alerts and continues execution
+mode: "enforce"
+
+# Fail mode safety choice:
+# - 'fail-closed': If policy engine encounters an error, the call is BLOCKED
+# - 'fail-open': If policy engine encounters an error, the call is PERMITTED but flagged CRITICAL
+fail_mode: "fail-closed"
+
+# Cryptographic and Hash-Chained Audit Configuration
+audit:
+  db_path: "blackbox_audit.db"
+  key_dir: ".blackbox_keys"
+  private_key_file: "ed25519_private.pem"
+  public_key_file: "ed25519_public.pem"
+  redact_secrets: true
+
+# Localhost Dashboard Settings
+dashboard:
+  host: "127.0.0.1" # Strictly bound to 127.0.0.1 (never 0.0.0.0)
+  port: 8420
+  open_browser: false
+
+# Canary Tripwires
+canaries:
+  enabled: true
+  alert_severity: "CRITICAL"
+  honeyfiles:
+    - "aws_credentials.honey.json"
+    - ".env.canary"
+    - "passwords_backup.txt"
+  tokens: []
+
+# Indirect Injection & Prompt Hijacking Scanner
+injection_scanner:
+  enabled: true
+  threshold_score: 40
+  scan_tool_descriptions: true
+  scan_tool_arguments: true
+  scan_tool_responses: true
+  alert_severity: "HIGH"
+
+# Security Policy Rules
+rules:
+  # Rule 1: Windows System Directory Protection (traversal, 8.3, case-insensitive)
+  - name: "BLOCK_WINDOWS_SYSTEM_DIRS"
+    action: "deny"
+    description: "Prevents tools from accessing or modifying Windows core system files"
+    tools: ["*"]
+    forbidden_paths:
+      - 'C:\Windows'
+      - 'C:\Windows\System32'
+      - 'C:\Windows\SysWOW64'
+      - 'C:\Program Files'
+      - '/windows'
+      - '/etc'
+    severity: "HIGH"
+
+  # Rule 2: Cryptographic Key & Secret File Protection
+  - name: "BLOCK_PRIVATE_KEYS_AND_SECRETS"
+    action: "deny"
+    description: "Blocks tools from reading private keys and agent blackbox signing keys"
+    tools: ["read_file", "write_file"]
+    forbidden_paths:
+      - "*.pem"
+      - "*.key"
+      - "*.id_rsa"
+      - ".blackbox_keys/*"
+    severity: "CRITICAL"
+
+  # Rule 3: Restrict Command Execution Patterns
+  - name: "RESTRICT_COMMAND_EXECUTION"
+    action: "deny"
+    description: "Blocks high-risk obfuscation and exfiltration command invocations"
+    tools: ["run_command", "execute_command", "bash"]
+    argument_patterns:
+      command: '(?i)(certutil.*urlcache|powershell.*-e\w{20,}|iex\s*\(|Invoke-WebRequest.*attacker|wmic.*create.*:)'
+    severity: "CRITICAL"
