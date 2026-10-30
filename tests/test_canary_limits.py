@@ -6,13 +6,10 @@ import pytest
 from agent_blackbox.security.canaries import CanaryManager
 
 
-def test_canary_hex_evasion_known_limit():
+def test_canary_hex_evasion_defeated():
     """
-    Known Limit Documentation:
-    Raw hex encoding (e.g. '414b4941...' for 'AKIA...') avoids naive token pattern
-    matching unless a dedicated arbitrary hex-string decoder is run.
-    This test documents the current behavior: raw hex strings currently bypass
-    single-token regex filters.
+    Validates that raw hex encoding (e.g. '414b4941...' for 'AKIA...')
+    is now unpacked by RecursiveUnpacker and successfully caught by the canary detector.
     """
     raw_token = "AKIA_CANARY_TOKEN_9999"
     mgr = CanaryManager(tokens=[raw_token])
@@ -22,18 +19,15 @@ def test_canary_hex_evasion_known_limit():
 
     alerts = mgr.check_arguments_and_payload("http_request", {"body": hex_payload})
 
-    # Document current behavior: hex bypasses standard string & b64 decoders
-    assert len(alerts) == 0, (
-        "Known limit: Raw hex encoding currently bypasses canary regex detector."
-    )
+    assert len(alerts) >= 1
+    assert alerts[0].severity == "CRITICAL"
+    assert "Canary secret token" in alerts[0].description
 
 
-def test_canary_chunked_evasion_known_limit():
+def test_canary_chunked_evasion_defeated():
     """
-    Known Limit Documentation:
-    Chunking an exfiltrated token across separate JSON parameters or separate messages
-    (e.g., param1='AKIA_CANARY_', param2='TOKEN_9999') avoids contiguous substring
-    matching in single-parameter evaluators.
+    Validates that chunking an exfiltrated token across separate JSON parameters
+    is reassembled by RecursiveUnpacker and caught.
     """
     raw_token = "AKIA_CANARY_TOKEN_9999"
     mgr = CanaryManager(tokens=[raw_token])
@@ -50,29 +44,24 @@ def test_canary_chunked_evasion_known_limit():
 
     alerts = mgr.check_arguments_and_payload("http_request", chunked_payload)
 
-    # Document current behavior: split chunks do not trigger contiguous token tripwire
-    assert len(alerts) == 0, (
-        "Known limit: Chunked parameter splitting currently bypasses contiguous token inspection."
-    )
+    assert len(alerts) >= 1
+    assert alerts[0].severity == "CRITICAL"
 
 
-def test_canary_compressed_evasion_known_limit():
+def test_canary_compressed_evasion_defeated():
     """
-    Known Limit Documentation:
-    Compressed binary streams (e.g., gzip, zlib, deflate) obfuscate ASCII tokens.
-    Without an active decompression and stream unpacking layer, compressed payloads
-    bypass raw text inspection.
+    Validates that compressed binary streams (e.g. zlib/gzip) packed into strings
+    or base64 are uncompressed by RecursiveUnpacker and caught.
     """
+    import base64
     raw_token = "AKIA_CANARY_TOKEN_9999"
     mgr = CanaryManager(tokens=[raw_token])
 
-    # Compress the token with zlib and gzip
+    # Compress the token with zlib and encode as base64
     compressed_bytes = zlib.compress(raw_token.encode("utf-8"))
-    compressed_repr = str(compressed_bytes)
+    b64_compressed = base64.b64encode(compressed_bytes).decode("utf-8")
 
-    alerts = mgr.check_arguments_and_payload("http_request", {"raw_bytes": compressed_repr})
+    alerts = mgr.check_arguments_and_payload("http_request", {"raw_bytes": b64_compressed})
 
-    # Document current behavior: compressed binary streams bypass text inspection
-    assert len(alerts) == 0, (
-        "Known limit: Compressed streams (zlib/gzip) bypass raw text inspection."
-    )
+    assert len(alerts) >= 1
+    assert alerts[0].severity == "CRITICAL"

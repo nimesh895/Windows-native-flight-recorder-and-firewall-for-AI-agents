@@ -10,6 +10,8 @@ from agent_blackbox.security.windows_path import WindowsPathNormalizer
 from agent_blackbox.security.canaries import CanaryManager, TripwireAlert
 from agent_blackbox.security.injection import InjectionScanner, InjectionScanResult
 from agent_blackbox.security.sequence import SessionSequenceTracker, SequenceViolation
+from agent_blackbox.security.entropy import EntropyScanner, HighEntropyFinding
+from agent_blackbox.security.risk_accumulator import SessionRiskAccumulator
 
 logger = logging.getLogger("agent_blackbox.policy")
 
@@ -23,8 +25,11 @@ class PolicyDecision(BaseModel):
     severity: str = "INFO"
     canary_alerts: List[TripwireAlert] = Field(default_factory=list)
     injection_alert: Optional[InjectionScanResult] = None
+    entropy_findings: List[HighEntropyFinding] = Field(default_factory=list)
+    cumulative_risk: Optional[Dict[str, Any]] = None
     normalized_arguments: Optional[Any] = None
     is_blocked: bool = False
+    requires_approval: bool = False
 
 
 class PolicyEngine:
@@ -43,6 +48,8 @@ class PolicyEngine:
             threshold_score=config.injection_scanner.threshold_score
         )
         self.sequence_tracker = SessionSequenceTracker()
+        self.entropy_scanner = EntropyScanner()
+        self.risk_accumulator = SessionRiskAccumulator()
 
     def _extract_paths(self, arguments: Any) -> List[Tuple[str, str]]:
         """
@@ -69,9 +76,30 @@ class PolicyEngine:
         """
         Evaluates a tool call according to active configuration and rules.
         Guaranteed to obey fail-closed or fail-open on evaluation errors.
+        Updates stateful cumulative session risk tracker with time-decay.
         """
         try:
-            return self._evaluate_inner(tool_name, arguments)
+            decision = self._evaluate_inner(tool_name, arguments)
+            # Accumulate risk in stateful session tracker
+            cum_risk = self.risk_accumulator.record_risk(
+                tool_name=tool_name,
+                delta_risk=decision.risk_score,
+                reason=decision.reason,
+            )
+            decision.cumulative_risk = cum_risk
+
+            # If cumulative risk exceeds quarantine threshold, enforce lockout
+            if cum_risk["needs_quarantine"] and self.config.mode == "enforce":
+                decision.allowed = False
+                decision.is_blocked = True
+                decision.severity = "CRITICAL"
+                decision.reason = f"Cumulative session risk threshold exceeded ({cum_risk['cumulative_score']} pts): {decision.reason}"
+
+            # Check if review/approval is needed
+            if cum_risk["needs_review"] or decision.rule_name == "ASK":
+                decision.requires_approval = True
+
+            return decision
         except Exception as e:
             logger.exception("Error evaluating policy for tool %s: %s", tool_name, e)
             if self.config.fail_mode == "fail-closed":
@@ -145,6 +173,26 @@ class PolicyEngine:
                     risk_score=inj_alert.risk_score,
                     severity=inj_alert.severity,
                     injection_alert=inj_alert,
+                )
+
+        # 2b. Zero-day high entropy credential scan
+        import json
+        args_json = json.dumps(arguments, ensure_ascii=False) if arguments is not None else ""
+        entropy_hits = self.entropy_scanner.scan_string(args_json)
+        if entropy_hits:
+            top_hit = entropy_hits[0]
+            if top_hit.risk_level == "CRITICAL":
+                reason = f"High-entropy credential detected in arguments ({top_hit.entropy} bits/char): {top_hit.token[:8]}..."
+                is_blocked = (mode == "enforce")
+                return PolicyDecision(
+                    allowed=not is_blocked,
+                    is_blocked=is_blocked,
+                    mode=mode,
+                    reason=reason,
+                    rule_name="HIGH_ENTROPY_CREDENTIAL",
+                    risk_score=85,
+                    severity="HIGH",
+                    entropy_findings=entropy_hits,
                 )
 
         # 3. Path normalization & ADS detection

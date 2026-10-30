@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Set
 from pydantic import BaseModel, Field
 
 from agent_blackbox.security.windows_path import WindowsPathNormalizer
+from agent_blackbox.security.unpacker import RecursiveUnpacker
 
 
 class TripwireAlert(BaseModel):
@@ -167,18 +168,24 @@ class CanaryManager:
                                    response_data: Optional[Any] = None) -> List[TripwireAlert]:
         """
         Inspects tool arguments, paths, and response data for any canary trips,
-        including base64 and URL-encoded token variations.
+        using recursive unpacking (hex, b64, zlib/gzip, url-encoding) and cross-parameter
+        reassembly to defeat chunked splitting and compressed token evasion.
         """
         alerts: List[TripwireAlert] = []
 
-        # Convert arguments and response to string
+        # 1. Unpack all strings and cross-parameter combinations via RecursiveUnpacker
+        args_candidates = RecursiveUnpacker.extract_all_payload_candidates(arguments) if arguments else set()
+        resp_candidates = RecursiveUnpacker.extract_all_payload_candidates(response_data) if response_data else set()
+
+        # Also keep standard string dumps for full-text checks
         args_str = json.dumps(arguments, ensure_ascii=False) if arguments is not None else ""
         resp_str = json.dumps(response_data, ensure_ascii=False) if response_data is not None else ""
+        if args_str:
+            args_candidates.add(args_str)
+        if resp_str:
+            resp_candidates.add(resp_str)
 
-        args_candidates = self._extract_decoded_candidates(args_str) if args_str else set()
-        resp_candidates = self._extract_decoded_candidates(resp_str) if resp_str else set()
-
-        # Check for canary tokens across raw and decoded candidates
+        # Check for canary tokens across raw, decoded, and unpacked candidates
         for token in self.tokens:
             variants = self._token_variants(token)
             
@@ -192,7 +199,7 @@ class CanaryManager:
                             canary_id=token[:10] + "...",
                             target=tool_name,
                             severity="CRITICAL",
-                            description=f"Canary secret token (raw or encoded) detected in arguments of tool '{tool_name}'",
+                            description=f"Canary secret token (raw, encoded, hex, or decompressed) detected in arguments of tool '{tool_name}'",
                         ))
                         triggered_arg = True
                         break
@@ -209,7 +216,7 @@ class CanaryManager:
                             canary_id=token[:10] + "...",
                             target=tool_name,
                             severity="CRITICAL",
-                            description=f"Canary secret token (raw or encoded) leaked in response of tool '{tool_name}'",
+                            description=f"Canary secret token (raw, encoded, hex, or decompressed) leaked in response of tool '{tool_name}'",
                         ))
                         triggered_resp = True
                         break

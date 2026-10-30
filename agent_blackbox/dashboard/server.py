@@ -4,13 +4,14 @@ import os
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
-from fastapi import FastAPI, Depends, HTTPException, Query, Header, Request, status
+from fastapi import FastAPI, Depends, HTTPException, Query, Header, Request, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from agent_blackbox.config import BlackboxConfig
 from agent_blackbox.audit.storage import AuditStorage
 from agent_blackbox.audit.verifier import AuditVerifier
+from agent_blackbox.security.hitl import GLOBAL_HITL_MANAGER
 
 
 def create_dashboard_app(
@@ -135,6 +136,51 @@ def create_dashboard_app(
     async def get_verification():
         res = verifier.verify()
         return res.model_dump()
+
+    # WebSocket Real-Time Event Stream
+    active_websockets: list[WebSocket] = []
+
+    @app.websocket("/ws/events")
+    async def websocket_events(websocket: WebSocket, token: Optional[str] = Query(None)):
+        if token != expected_token:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        await websocket.accept()
+        active_websockets.append(websocket)
+        try:
+            # Send initial greeting & pending HITL items
+            pending = [p.model_dump() for p in GLOBAL_HITL_MANAGER.get_pending()]
+            await websocket.send_json({"type": "init", "pending_hitl": pending})
+
+            while True:
+                # Keep-alive ping loop / client message handler
+                data = await websocket.receive_text()
+                if data == "ping":
+                    await websocket.send_text("pong")
+        except WebSocketDisconnect:
+            pass
+        finally:
+            if websocket in active_websockets:
+                active_websockets.remove(websocket)
+
+    # HITL Human-In-The-Loop Approval Endpoints
+    @app.get("/api/hitl/pending", dependencies=[Depends(verify_token)])
+    async def get_pending_hitl():
+        pending = GLOBAL_HITL_MANAGER.get_pending()
+        return [p.model_dump() for p in pending]
+
+    @app.post("/api/hitl/respond", dependencies=[Depends(verify_token)])
+    async def respond_hitl(request: Request):
+        body = await request.json()
+        req_id = body.get("request_id")
+        approved = bool(body.get("approved", False))
+
+        if not req_id:
+            raise HTTPException(status_code=400, detail="Missing request_id")
+
+        success = GLOBAL_HITL_MANAGER.resolve_request(req_id, approved)
+        return {"success": success, "request_id": req_id, "approved": approved}
 
     @app.post("/api/simulate-tamper", dependencies=[Depends(verify_token)])
     async def simulate_tampering():

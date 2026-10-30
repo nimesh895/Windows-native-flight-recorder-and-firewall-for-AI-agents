@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from agent_blackbox.config import BlackboxConfig
 from agent_blackbox.security.policy import PolicyEngine, PolicyDecision
 from agent_blackbox.security.tool_pinning import ToolPinningManager
+from agent_blackbox.security.hitl import GLOBAL_HITL_MANAGER
 from agent_blackbox.audit.storage import AuditStorage
 from agent_blackbox.proxy.mcp_spec import (
     JsonRpcRequest,
@@ -112,6 +113,21 @@ class McpStdioProxy:
 
             # Policy evaluation
             decision: PolicyDecision = self.policy_engine.evaluate_call(tool_name, arguments)
+
+            # Check if interactive approval is required (HITL workflow)
+            if decision.requires_approval and not decision.is_blocked:
+                # Trigger asynchronous approval request
+                approved = await GLOBAL_HITL_MANAGER.request_approval(
+                    session_id=self.session_id,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    reason=decision.reason,
+                    risk_score=decision.risk_score,
+                    severity=decision.severity,
+                )
+                if not approved:
+                    decision.is_blocked = True
+                    decision.reason = f"Human-In-The-Loop review denied or timed out for tool '{tool_name}'"
 
             if decision.is_blocked:
                 # Log blocked event
