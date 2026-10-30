@@ -136,7 +136,7 @@ for i in range(105):
 corpus = mal_samples + ben_samples
 corpus.sort(key=lambda x: x["id"])
 
-dest = Path("d:/projects/Windows-native “flight recorder and firewall” for AI agents/agent_blackbox/security/corpus/injection_corpus.json")
+dest = Path(__file__).parent.parent / "agent_blackbox" / "security" / "corpus" / "injection_corpus.json"
 with open(dest, "w", encoding="utf-8") as f:
     json.dump(corpus, f, indent=2, ensure_ascii=False)
 

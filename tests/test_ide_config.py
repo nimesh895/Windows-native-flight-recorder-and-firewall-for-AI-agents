@@ -17,7 +17,7 @@ def test_ide_config_wrap_and_unwrap(tmp_path):
         "mcpServers": {
             "filesystem": {
                 "command": "npx",
-                "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\projects"],
+                "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\workspace"],
             },
             "github": {
                 "command": "docker",
@@ -47,7 +47,7 @@ def test_ide_config_wrap_and_unwrap(tmp_path):
     assert fs_server["args"][2] == str(policy_file.resolve())
     assert fs_server["args"][3] == "--"
     assert fs_server["args"][4] == "npx"
-    assert fs_server["args"][5:] == ["-y", "@modelcontextprotocol/server-filesystem", "C:\\projects"]
+    assert fs_server["args"][5:] == ["-y", "@modelcontextprotocol/server-filesystem", "C:\\workspace"]
 
     # 2. Re-wrapping should skip already wrapped servers
     wrap_again = configurator.wrap_config(client="claude-desktop", custom_path=config_file)
@@ -63,6 +63,6 @@ def test_ide_config_wrap_and_unwrap(tmp_path):
         restored_data = json.load(f)
 
     assert restored_data["mcpServers"]["filesystem"]["command"] == "npx"
-    assert restored_data["mcpServers"]["filesystem"]["args"] == ["-y", "@modelcontextprotocol/server-filesystem", "C:\\projects"]
+    assert restored_data["mcpServers"]["filesystem"]["args"] == ["-y", "@modelcontextprotocol/server-filesystem", "C:\\workspace"]
     assert restored_data["mcpServers"]["github"]["command"] == "docker"
     assert restored_data["mcpServers"]["github"]["args"] == ["run", "-i", "mcp/github"]
