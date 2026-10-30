@@ -103,6 +103,26 @@ Deploy realistic honeyfiles and tripwires into a test directory:
 agent-blackbox canary --deploy .\canary_sandbox
 ```
 
+### 4. One-Click IDE Auto-Configuration (Under 10 Seconds)
+
+Instead of manually editing JSON config files, automatically wrap all your MCP servers with AgentBlackbox:
+
+```powershell
+# For Claude Desktop
+agent-blackbox setup --client claude-desktop
+
+# For Cursor
+agent-blackbox setup --client cursor
+
+# For VS Code
+agent-blackbox setup --client vscode
+```
+
+To restore the original unproxied configuration at any time:
+```powershell
+agent-blackbox unwrap --client claude-desktop
+```
+
 ---
 
 ## 🛡️ Usage

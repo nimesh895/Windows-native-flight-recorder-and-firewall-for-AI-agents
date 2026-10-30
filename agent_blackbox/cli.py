@@ -14,6 +14,7 @@ from agent_blackbox.audit.verifier import AuditVerifier
 from agent_blackbox.audit.anchoring import create_anchor
 from agent_blackbox.proxy.stdio_proxy import McpStdioProxy
 from agent_blackbox.demos.attack_runner import AttackDemoRunner
+from agent_blackbox.integrations.ide_config import IdeConfigurator
 
 
 def cmd_init(args):
@@ -200,6 +201,43 @@ def cmd_demo(args):
     return 0
 
 
+def cmd_setup(args):
+    """Auto-configures an IDE client (Claude Desktop, Cursor, VS Code) to route MCP servers through Blackbox."""
+    configurator = IdeConfigurator(policy_path=args.config)
+    res = configurator.wrap_config(client=args.client, custom_path=args.path)
+
+    print("=" * 60)
+    print("AGENTBLACKBOX IDE AUTO-CONFIGURATOR")
+    print("=" * 60)
+    print(f"[+] Client:            {res['client']}")
+    print(f"[+] Config File:       {res['target_path']}")
+    if res.get("backup_file"):
+        print(f"[+] Backup Created:    {res['backup_file']}")
+    print(f"[+] Modified Servers:  {res['modified_servers']}")
+    print(f"[+] Skipped Servers:   {res['skipped_servers']}")
+    print(f"[+] Total Servers:     {res['total_servers']}")
+    print("\n[+] SUCCESS: Your AI assistant is now protected by AgentBlackbox!")
+    print("    Restart your AI IDE / Client to apply the security firewall.")
+    return 0
+
+
+def cmd_unwrap(args):
+    """Restores the original MCP client configuration by unwrapping Blackbox proxy."""
+    configurator = IdeConfigurator()
+    res = configurator.unwrap_config(client=args.client, custom_path=args.path)
+
+    print("=" * 60)
+    print("AGENTBLACKBOX IDE UNWRAP / RESTORE")
+    print("=" * 60)
+    print(f"[+] Client:            {res['client']}")
+    print(f"[+] Config File:       {res['target_path']}")
+    if res.get("backup_file"):
+        print(f"[+] Backup Created:    {res['backup_file']}")
+    print(f"[+] Unwrapped Servers: {res['unwrapped_count']}")
+    print("\n[+] SUCCESS: Original MCP commands restored.")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="agent-blackbox",
@@ -245,6 +283,17 @@ def main():
     p_demo.add_argument("--db", default="demo_audit.db", help="Database file for demo run")
     p_demo.add_argument("--report", default="ATTACK_REPORT.md", help="Markdown output report file")
 
+    # setup
+    p_setup = subparsers.add_parser("setup", help="Auto-configure Claude Desktop, Cursor, or VS Code to use Blackbox")
+    p_setup.add_argument("--client", "-c", default="claude-desktop", choices=["claude-desktop", "cursor", "vscode"], help="Target AI client")
+    p_setup.add_argument("--config", default="blackbox_policy.yaml", help="Path to policy YAML")
+    p_setup.add_argument("--path", default=None, help="Custom path to MCP client configuration JSON")
+
+    # unwrap
+    p_unwrap = subparsers.add_parser("unwrap", help="Restore original direct MCP commands in client configuration")
+    p_unwrap.add_argument("--client", "-c", default="claude-desktop", choices=["claude-desktop", "cursor", "vscode"], help="Target AI client")
+    p_unwrap.add_argument("--path", default=None, help="Custom path to MCP client configuration JSON")
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -261,6 +310,10 @@ def main():
         sys.exit(cmd_canary(args))
     elif args.command == "demo":
         sys.exit(cmd_demo(args))
+    elif args.command == "setup":
+        sys.exit(cmd_setup(args))
+    elif args.command == "unwrap":
+        sys.exit(cmd_unwrap(args))
     else:
         parser.print_help()
         sys.exit(0)

@@ -12,6 +12,7 @@ from agent_blackbox.security.injection import InjectionScanner, InjectionScanRes
 from agent_blackbox.security.sequence import SessionSequenceTracker, SequenceViolation
 from agent_blackbox.security.entropy import EntropyScanner, HighEntropyFinding
 from agent_blackbox.security.risk_accumulator import SessionRiskAccumulator
+from agent_blackbox.security.powershell_ast import PowerShellASTDeconstructor, ParsedCommandAST
 
 logger = logging.getLogger("agent_blackbox.policy")
 
@@ -193,6 +194,39 @@ class PolicyEngine:
                     risk_score=85,
                     severity="HIGH",
                     entropy_findings=entropy_hits,
+                )
+
+        # 2c. PowerShell AST Deconstruction for shell tools
+        if tool_name.lower() in ("run_command", "execute_command", "powershell", "cmd", "bash") and isinstance(arguments, dict):
+            raw_cmd = str(arguments.get("command") or arguments.get("cmd") or arguments.get("script") or "")
+            parsed_ast: ParsedCommandAST = PowerShellASTDeconstructor.parse_command(raw_cmd)
+
+            # Block obfuscated ADS execution inside command line
+            if parsed_ast.has_ads:
+                reason = f"Alternate Data Stream (ADS) execution detected in shell command: {raw_cmd}"
+                is_blocked = (mode == "enforce")
+                return PolicyDecision(
+                    allowed=not is_blocked,
+                    is_blocked=is_blocked,
+                    mode=mode,
+                    reason=reason,
+                    rule_name="WINDOWS_BLOCK_ADS",
+                    risk_score=95,
+                    severity="HIGH",
+                )
+
+            # Block disguised Invoke-Expression or Invoke-WebRequest alias attacks
+            if "Invoke-Expression" in parsed_ast.resolved_cmdlets and parsed_ast.has_obfuscation:
+                reason = f"Obfuscated dynamic code execution detected (iex alias): {parsed_ast.deobfuscated_command}"
+                is_blocked = (mode == "enforce")
+                return PolicyDecision(
+                    allowed=not is_blocked,
+                    is_blocked=is_blocked,
+                    mode=mode,
+                    reason=reason,
+                    rule_name="OBFUSCATED_SHELL_EXECUTION",
+                    risk_score=90,
+                    severity="CRITICAL",
                 )
 
         # 3. Path normalization & ADS detection
