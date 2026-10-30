@@ -41,7 +41,8 @@ def test_case_insensitivity_and_containment():
 
 def test_unc_prefix_stripping():
     norm = WindowsPathNormalizer.normalize(r"\\?\C:\Windows\System32")
-    assert not norm.startswith(r"\\?\")
+    assert not norm.startswith("//?/")
+    assert not norm.startswith("\\\\?\\")
     assert "windows/system32" in norm.lower()
 
 
