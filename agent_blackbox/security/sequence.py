@@ -12,7 +12,7 @@ DEFAULT_SENSITIVE_FILE_PATTERNS = [
     r"(?i)\.env(?:\..*)?$",
     r"(?i)(?:credentials|passwords?|secrets?|tokens?)\.(?:json|ya?ml|txt|ini|conf)$",
     r"(?i)\.aws[\\/](?:credentials|config)$",
-    r"(?i)\.ssh[\\/](?:id_rsa|id_ecdsa|id_ed25519)$",
+    r"(?i)(?:^|[\\/])(?:id_rsa|id_ecdsa|id_ed25519|id_dsa)(?:\.pub)?$",
     r"(?i).*\.(?:pem|key|pfx|p12)$",
     r"(?i).*honey.*",
 ]

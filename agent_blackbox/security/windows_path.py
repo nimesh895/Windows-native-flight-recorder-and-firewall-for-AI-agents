@@ -18,7 +18,7 @@ else:
     _GetLongPathNameW = None
 
 
-ADS_REGEX = re.compile(r"^([a-zA-Z]:[\\/][^:]+|[^:]+):([^\\/:]+)(?::\$DATA)?$", re.IGNORECASE)
+ADS_REGEX = re.compile(r"^([a-zA-Z]:[\\/][^:]+|[^:]+):(?::\$DATA|([^\\/:]+)(?::\$DATA)?)$", re.IGNORECASE)
 
 
 class WindowsPathNormalizer:
@@ -48,7 +48,7 @@ class WindowsPathNormalizer:
         match = ADS_REGEX.match(raw_path)
         if match:
             base_part = match.group(1)
-            stream_part = match.group(2)
+            stream_part = match.group(2) or "$DATA"
             # Ignore standard $DATA stream specifier if it's just the default primary stream
             if stream_part.upper() == "$DATA":
                 return True, base_part, "$DATA"
@@ -140,10 +140,13 @@ class WindowsPathNormalizer:
             path_to_resolve = path_str
 
         # Remove extended-length prefix if present for clean resolution
-        if path_to_resolve.startswith(r"\\?\UNC\\"):
-            path_to_resolve = r"\\" + path_to_resolve[8:]
-        elif path_to_resolve.startswith(r"\\?\\"):
+        if path_to_resolve.startswith("\\\\?\\UNC\\") or path_to_resolve.startswith("//?/UNC/"):
+            path_to_resolve = "\\\\" + path_to_resolve[8:]
+        elif path_to_resolve.startswith("\\\\?\\") or path_to_resolve.startswith("//?/"):
             path_to_resolve = path_to_resolve[4:]
+
+        # Eliminate '.' and '..' traversal segments
+        path_to_resolve = os.path.normpath(path_to_resolve)
 
         # Handle base dir if relative
         p = Path(path_to_resolve)

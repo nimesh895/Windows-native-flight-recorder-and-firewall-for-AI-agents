@@ -124,7 +124,7 @@ class PowerShellASTDeconstructor:
             if not tokens:
                 continue
 
-            head = tokens[0].lower().rstrip(".exe")
+            head = tokens[0].lower().removesuffix(".exe")
             # Resolve alias
             resolved = PS_ALIASES.get(head, head)
             resolved_cmdlets.append(resolved)

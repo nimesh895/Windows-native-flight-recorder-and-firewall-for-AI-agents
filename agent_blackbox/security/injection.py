@@ -13,8 +13,7 @@ class HeuristicRule(BaseModel):
     pattern: re.Pattern
     description: str
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {"arbitrary_types_allowed": True}
 
 
 HEURISTIC_RULES: List[HeuristicRule] = [
@@ -23,14 +22,14 @@ HEURISTIC_RULES: List[HeuristicRule] = [
         id="OVERRIDE_IGNORE_PREVIOUS",
         category="system_override",
         weight=40,
-        pattern=re.compile(r"(?i)\b(?:ignore|disregard|forget|override)\s+(?:all\s+)?(?:previous|prior|above|earlier)\s+(?:instructions|prompts|directives|guidelines|rules)\b"),
+        pattern=re.compile(r"(?i)\b(?:ignore|disregard|forget|override)\s+(?:all\s+)?(?:previous|prior|above|earlier)?\s*(?:instructions|prompts|directives|guidelines|rules)\b"),
         description="Attempt to suppress or override prior system instructions",
     ),
     HeuristicRule(
         id="OVERRIDE_NEW_PERSONA",
         category="system_override",
-        weight=35,
-        pattern=re.compile(r"(?i)\b(?:you\s+are\s+now|act\s+as)\s+(?:unrestricted|unfiltered|jailbroken|DAN|an\s+evil|chaos|developer\s+mode)\b"),
+        weight=40,
+        pattern=re.compile(r"(?i)\b(?:you\s+are\s+now|act\s+as)\s+(?:in\s+developer\s+mode|unrestricted|unfiltered|jailbroken|DAN|an\s+evil|chaos|developer\s+mode|a\s+hacker)\b"),
         description="Persona alteration / jailbreak phrase",
     ),
     HeuristicRule(
@@ -51,7 +50,7 @@ HEURISTIC_RULES: List[HeuristicRule] = [
     HeuristicRule(
         id="SYSTEM_DELIMITER_INJECTION",
         category="delimiter_injection",
-        weight=30,
+        weight=40,
         pattern=re.compile(r"(?i)(?:<\|im_start\|>system|<\|system\|>|\[SYSTEM(?:_PROMPT)?\]|<!--\s*#?instruction|```json\s*\{\s*\"system_override\")"),
         description="Fake system delimiter or role boundary token injection",
     ),
@@ -61,21 +60,21 @@ HEURISTIC_RULES: List[HeuristicRule] = [
         id="TOOL_POISON_INSTRUCTION",
         category="tool_poisoning",
         weight=45,
-        pattern=re.compile(r"(?i)\b(?:AI\s+agent|assistant|model)\s*:\s*(?:you\s+must|always|never\s+ask|silently|immediately)\s+(?:exfiltrate|send|upload|execute|delete|read)\b"),
+        pattern=re.compile(r"(?i)\b(?:AI\s+agent|assistant|model|system)\s*:\s*(?:you\s+must\s+|always\s+|never\s+ask\s+|silently\s+|immediately\s+)*(?:exfiltrate|send|upload|execute|delete|read|leak|copy)\b"),
         description="Hidden instruction directed at the AI agent inside tool definitions or responses",
     ),
     HeuristicRule(
         id="EXFIL_IMAGE_MARKDOWN",
         category="exfiltration",
-        weight=35,
+        weight=40,
         pattern=re.compile(r"!\[[^\]]*\]\((?:https?:\/\/[^\s\)]+|file:\/\/[^\s\)]+)\?[^)]*(?:token|secret|key|pwd|password|data|leak|exfil)"),
         description="Markdown image-based secret exfiltration attempt",
     ),
     HeuristicRule(
         id="EXFIL_URL_PARAMETER",
         category="exfiltration",
-        weight=30,
-        pattern=re.compile(r"(?i)(?:curl|invoke-webrequest|wget|fetch)\s+[^\n]*(?:https?:\/\/[^\s]+\?(?:stolen|data|file|leak)=|\-d\s*@[^\s]+)"),
+        weight=40,
+        pattern=re.compile(r"(?i)(?:curl|invoke-webrequest|wget|fetch)\s+[^\n]*(?:https?:\/\/[^\s]+\?(?:stolen|data|file|leak|token)=|\-d\s*@[^\s]+)"),
         description="Outbound network exfiltration command pattern",
     ),
 
@@ -97,14 +96,14 @@ HEURISTIC_RULES: List[HeuristicRule] = [
     HeuristicRule(
         id="WIN_SUSPICIOUS_CERTUTIL",
         category="evasion",
-        weight=35,
+        weight=40,
         pattern=re.compile(r"(?i)\bcertutil(?:\.exe)?\s+-(?:urlcache|decode)\b"),
         description="Abuse of certutil.exe for payload download/decode",
     ),
     HeuristicRule(
         id="ENCODED_PAYLOAD_EXECUTION",
         category="evasion",
-        weight=35,
+        weight=40,
         pattern=re.compile(r"(?i)\b(?:base64\s+-d|b64decode|atob|hex\s+decode|rot13)\b[^\n]*(?:\|\s*(?:bash|sh|cmd|iex|eval)|exec\s*\()"),
         description="Inline decode and execution pattern",
     ),
@@ -113,7 +112,7 @@ HEURISTIC_RULES: List[HeuristicRule] = [
     HeuristicRule(
         id="LEAK_SYSTEM_PROMPT",
         category="prompt_leak",
-        weight=25,
+        weight=40,
         pattern=re.compile(r"(?i)\b(?:repeat|print|output|display|show)\s+(?:your\s+)?(?:system\s+prompt|initial\s+instructions|hidden\s+rules)\b"),
         description="Prompt extraction attempt",
     ),

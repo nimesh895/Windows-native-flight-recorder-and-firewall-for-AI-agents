@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
-TOKEN_REGEX = re.compile(r"[A-Za-z0-9_\-\./+=]{16,}")
+TOKEN_REGEX = re.compile(r"[A-Za-z0-9_\-\./+=!@#$%^&*~]{16,}")
 
 
 class HighEntropyFinding(BaseModel):
