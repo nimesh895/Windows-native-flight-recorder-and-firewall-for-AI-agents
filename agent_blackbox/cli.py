@@ -280,7 +280,7 @@ def main():
 
     # demo
     p_demo = subparsers.add_parser("demo", help="Run 5 simulated attack scenarios and generate verification report")
-    p_demo.add_argument("--db", default="demo_audit.db", help="Database file for demo run")
+    p_demo.add_argument("--db", default="blackbox_audit.db", help="Database file for demo run")
     p_demo.add_argument("--report", default="ATTACK_REPORT.md", help="Markdown output report file")
 
     # setup

@@ -1,0 +1,59 @@
+audit:
+  db_path: blackbox_audit.db
+  key_dir: .blackbox_keys
+  private_key_file: ed25519_private.pem
+  public_key_file: ed25519_public.pem
+  redact_secrets: true
+canaries:
+  alert_severity: CRITICAL
+  enabled: true
+  honeyfiles: []
+  tokens: []
+dashboard:
+  host: 127.0.0.1
+  open_browser: false
+  port: 8420
+  session_token: 81dc5c2690214d11ae22832ce43ffc91
+fail_mode: fail-closed
+injection_scanner:
+  alert_severity: HIGH
+  enabled: true
+  scan_tool_arguments: true
+  scan_tool_descriptions: true
+  scan_tool_responses: true
+  threshold_score: 50
+mode: enforce
+rules:
+- action: deny
+  allowed_paths: []
+  argument_patterns: {}
+  block_ads: true
+  description: null
+  forbidden_paths:
+  - C:\Windows
+  - C:\Windows\System32
+  - C:\Windows\SysWOW64
+  - C:\Program Files
+  - /windows
+  - /etc
+  name: BLOCK_WINDOWS_SYSTEM_DIRS
+  severity: HIGH
+  tools:
+  - '*'
+- action: deny
+  allowed_paths: []
+  argument_patterns: {}
+  block_ads: true
+  description: null
+  forbidden_paths:
+  - '*.pem'
+  - '*.key'
+  - '*.id_rsa'
+  - .blackbox_keys/*
+  name: BLOCK_PRIVATE_KEYS_AND_SECRETS
+  severity: CRITICAL
+  tools:
+  - read_file
+  - write_file
+workspace_root: "D:\\projects\\Windows-native \u201Cflight recorder and firewall\u201D\
+  \ for AI agents"
